@@ -206,3 +206,150 @@ def verify_result4_workbook(path: Path) -> Result4Check:
         data_rows=len(times),
         issues=tuple(issues),
     )
+
+
+# 问题1~3 官方结果文件的固定列：0.0～2.0 cm，步长 0.1 cm，共 21 列。
+RESULT_DISTANCE_CM = tuple(round(0.1 * index, 1) for index in range(21))
+
+# 各题应有的工作表名称；问题3 只有一张表，模板名为 Sheet1。
+RESULT_SHEET_TITLES: dict[int, tuple[str, ...] | None] = {
+    1: ("温度", "水分浓度"),
+    2: ("温度", "水分浓度"),
+    3: None,
+}
+
+# 各题的首个数据时刻与输出间隔（秒）。
+RESULT_FIRST_TIME_S: dict[int, float] = {1: 1.0, 2: 1.0, 3: 60.0}
+RESULT_INTERVAL_S: dict[int, float] = {1: 1.0, 2: 1.0, 3: 60.0}
+
+
+@dataclass(frozen=True)
+class ResultWorkbookCheck:
+    """问题1~3结果工作簿的回读校验结果。"""
+
+    question: int
+    sheets: tuple[str, ...]
+    data_rows: int
+    issues: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        """所有检查项是否全部通过。"""
+
+        return not self.issues
+
+    def __str__(self) -> str:
+        """输出中文校验摘要。"""
+
+        if self.passed:
+            return (
+                f"result{self.question} 回读校验通过：工作表 "
+                f"{'、'.join(self.sheets)}，数据 {self.data_rows} 行"
+            )
+        return (
+            f"result{self.question} 回读校验未通过："
+            + "；".join(self.issues)
+        )
+
+
+def verify_result_workbook(path: Path, question: int) -> ResultWorkbookCheck:
+    """回读问题1~3的结果工作簿，逐项检查题目要求的格式。
+
+    检查内容：工作表名称、表头（0.0～2.0 cm 共 21 列）、时间列严格递增且
+    落在规定间隔上（末行允许是连续事件时刻）、全部数据格非空且有限、
+    数值单元格为四位小数格式。
+    """
+
+    if question not in RESULT_SHEET_TITLES:
+        raise ValueError("问题编号必须为 1、2、3 之一")
+    if not path.exists():
+        return ResultWorkbookCheck(question, (), 0, (f"未找到文件：{path}",))
+
+    workbook = openpyxl.load_workbook(path, data_only=True)
+    issues: list[str] = []
+    expected_titles = RESULT_SHEET_TITLES[question]
+    if expected_titles is not None and tuple(workbook.sheetnames) != expected_titles:
+        issues.append(
+            f"工作表应为 {expected_titles}，实际为 {tuple(workbook.sheetnames)}"
+        )
+
+    rows_seen = 0
+    for worksheet in workbook.worksheets:
+        header = [
+            worksheet.cell(row=1, column=column).value
+            for column in range(2, 23)
+        ]
+        for index, (actual, expected) in enumerate(
+            zip(header, RESULT_DISTANCE_CM),
+            start=2,
+        ):
+            if actual is None or not np.isclose(
+                float(actual),
+                expected,
+                atol=1.0e-9,
+            ):
+                issues.append(
+                    f"[{worksheet.title}] 第{index}列表头应为 {expected}，"
+                    f"实际为 {actual!r}"
+                )
+
+        times: list[float] = []
+        for row in range(2, worksheet.max_row + 1):
+            value = worksheet.cell(row=row, column=1).value
+            if value is None:
+                continue
+            times.append(float(value))
+
+        if not times:
+            issues.append(f"[{worksheet.title}] 时间列没有任何数据")
+            continue
+        rows_seen = max(rows_seen, len(times))
+
+        if any(later <= earlier for earlier, later in zip(times, times[1:])):
+            issues.append(f"[{worksheet.title}] 时间列不是严格递增")
+        if not np.isclose(
+            times[0],
+            RESULT_FIRST_TIME_S[question],
+            atol=1.0e-6,
+        ):
+            issues.append(
+                f"[{worksheet.title}] 首个时刻应为 "
+                f"{RESULT_FIRST_TIME_S[question]} s，实际为 {times[0]} s"
+            )
+        interval = RESULT_INTERVAL_S[question]
+        for time_s in times[:-1]:
+            if not np.isclose(time_s % interval, 0.0, atol=1.0e-6):
+                issues.append(
+                    f"[{worksheet.title}] 时间 {time_s} s 不是 {interval:g} s "
+                    "的整数倍"
+                )
+                break
+
+        for row in range(2, 2 + len(times)):
+            for column in range(2, 23):
+                cell = worksheet.cell(row=row, column=column)
+                if cell.value is None:
+                    issues.append(f"[{worksheet.title}] 第{row}行第{column}列为空")
+                    break
+                if cell.number_format != "0.0000":
+                    issues.append(
+                        f"[{worksheet.title}] 第{row}行第{column}列不是四位小数格式"
+                    )
+                    break
+                if not np.isfinite(float(cell.value)):
+                    issues.append(
+                        f"[{worksheet.title}] 第{row}行第{column}列不是有限数"
+                    )
+                    break
+            else:
+                continue
+            break
+
+    sheet_names = tuple(workbook.sheetnames)
+    workbook.close()
+    return ResultWorkbookCheck(
+        question=question,
+        sheets=sheet_names,
+        data_rows=rows_seen,
+        issues=tuple(issues),
+    )

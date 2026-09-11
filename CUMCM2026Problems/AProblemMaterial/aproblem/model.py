@@ -131,6 +131,8 @@ class DryingModel:
             node_moisture=moisture,
             node_radii_m=geometry.nodes_m,
             property_function=self.properties.diffusivity,
+            # 只有水分方程有通量势；传热侧不传，策略会退回各自的安全取法。
+            flux_potential_function=self.properties.flux_potential,
         )
         moisture_conductance = (
             diffusivity_faces
@@ -222,6 +224,7 @@ class DryingModel:
             node_moisture=moisture,
             node_radii_m=geometry.nodes_m,
             property_function=self.properties.diffusivity,
+            flux_potential_function=self.properties.flux_potential,
         )
         moisture_faces = (
             diffusivity_faces

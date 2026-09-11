@@ -210,8 +210,13 @@ def plot_interface_convergence(
     """绘制不同界面策略的网格收敛曲线。"""
 
     _configure_chinese_font()
-    colors = {"midpoint": "#0072B2", "harmonic": "#D55E00", "series": "#009E73"}
-    markers = {"midpoint": "o", "harmonic": "s", "series": "^"}
+    colors = {
+        "midpoint": "#0072B2",
+        "harmonic": "#D55E00",
+        "series": "#009E73",
+        "kirchhoff": "#CC79A7",
+    }
+    markers = {"midpoint": "o", "harmonic": "s", "series": "^", "kirchhoff": "D"}
 
     figure, axis = plt.subplots(figsize=(7.6, 4.6))
     for name, values in series.items():

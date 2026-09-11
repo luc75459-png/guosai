@@ -17,7 +17,11 @@ from pathlib import Path
 import numpy as np
 
 from .axisymmetric import AxisymmetricModel
-from .config import ProjectPaths, SimulationConfig
+from .config import (
+    ProjectPaths,
+    SimulationConfig,
+    default_interface_strategy,
+)
 from .crosscheck import integrate_bdf
 from .data import load_environment, load_radius
 from .integrator import integrate_heun
@@ -42,6 +46,9 @@ class CaseOutcome:
     end_time_s: float
     event_time_s: float
     event_hours: float
+    # 达标事件是否真的在终止时刻前触发；BDF 触发时末时刻正好等于事件时刻，
+    # 因此不能用 event_time_s 与 end_time_s 是否相等来判断。
+    event_reached: bool
     elapsed_s: float
     step_count: int
     min_step_s: float
@@ -69,7 +76,7 @@ def run_case(
     intervals: int,
     interface_strategy: str,
     paths: ProjectPaths,
-    include_end_faces: bool = True,
+    include_end_faces: bool = False,
     length_scaling: str = "constant",
     plateau_mode: str = "fixed",
     integrator: str = "heun",
@@ -119,6 +126,7 @@ def run_case(
         if result.event_time_s is not None
         else float(result.time_s[-1])
     )
+    event_reached = result.event_time_s is not None
     steps = np.asarray(result.step_s if result.step_s is not None else [])
 
     return CaseOutcome(
@@ -133,6 +141,7 @@ def run_case(
         end_time_s=float(result.time_s[-1]),
         event_time_s=event_time_s,
         event_hours=event_time_s / 3600.0,
+        event_reached=event_reached,
         elapsed_s=elapsed_s,
         step_count=int(steps.size),
         min_step_s=float(np.min(steps)) if steps.size else 0.0,
@@ -178,6 +187,8 @@ def interface_scan(
     grids: tuple[int, ...] = (20, 40, 80),
     integrator: str = "bdf",
     strategies: tuple[str, ...] = INTERFACE_STRATEGY_NAMES,
+    question: int = 4,
+    include_end_faces: bool = True,
 ) -> list[CaseOutcome]:
     """遍历"界面策略 × 网格"，输出达标时刻和相邻网格相对变化。"""
 
@@ -185,12 +196,12 @@ def interface_scan(
     for strategy in strategies:
         for intervals in grids:
             outcome = run_case(
-                question=4,
+                question=question,
                 intervals=intervals,
                 interface_strategy=strategy,
                 paths=paths,
                 integrator=integrator,
-                include_end_faces=True,
+                include_end_faces=include_end_faces,
                 label=f"{strategy}-N{intervals}",
             )
             print(
@@ -291,6 +302,14 @@ def render_interface_scan(outcomes: list[CaseOutcome], grids: tuple[int, ...]) -
         f"N={grids[-2]}→{grids[-1]} 相对变化" if len(grids) > 1 else "相对变化"
     ]
     rows: list[list[str]] = []
+
+    def event_cell(outcome: CaseOutcome) -> str:
+        """达标事件在终止时刻前触发才给出定值，否则标注未达标。"""
+
+        if outcome.event_reached:
+            return f"{outcome.event_hours:.4f} h"
+        return f">{outcome.event_hours:.4f} h（未达标）"
+
     for strategy in strategies:
         by_grid = {
             outcome.intervals: outcome
@@ -298,10 +317,17 @@ def render_interface_scan(outcomes: list[CaseOutcome], grids: tuple[int, ...]) -
             if outcome.interface_strategy == strategy
         }
         cells = [
-            f"{by_grid[n].event_hours:.4f} h" if n in by_grid else "—"
+            event_cell(by_grid[n]) if n in by_grid else "—"
             for n in grids
         ]
-        if len(grids) > 1 and grids[-1] in by_grid and grids[-2] in by_grid:
+        both_reached = (
+            len(grids) > 1
+            and grids[-1] in by_grid
+            and grids[-2] in by_grid
+            and by_grid[grids[-1]].event_reached
+            and by_grid[grids[-2]].event_reached
+        )
+        if both_reached:
             change = _relative_change(
                 by_grid[grids[-2]].event_time_s,
                 by_grid[grids[-1]].event_time_s,
@@ -335,7 +361,8 @@ def build_axisymmetric_model(
 ) -> AxisymmetricModel:
     """按配置组装二维轴对称模型。
 
-    半径函数来自附件2；长度按 ``length_scaling`` 取恒定值或与半径同步
+    只有收缩问题（问题4）读附件2 的半径演化；问题1~3 半径固定为
+    ``config.radius_m``。长度按 ``length_scaling`` 取恒定值或与半径同步
     缩短。二维模型里端面是真实边界，不再使用 ``2h/L`` 体积源项。
     """
 
@@ -345,9 +372,14 @@ def build_axisymmetric_model(
         plateau_moisture=config.plateau_moisture,
         hold_last_value=(config.plateau_mode == "last_value"),
     )
-    radius_data = load_radius(paths.radius_file)
-    initial_radius_m = float(radius_data(0.0))
-    if config.length_scaling == "isotropic":
+    if QUESTION_SPECS[question].shrinking:
+        radius_data = load_radius(paths.radius_file)
+    else:
+        radius_data = None
+    initial_radius_m = (
+        float(radius_data(0.0)) if radius_data is not None else config.radius_m
+    )
+    if radius_data is not None and config.length_scaling == "isotropic":
         length_function = (
             lambda time_s: config.cylinder_length_m
             * float(radius_data(time_s))
@@ -355,17 +387,26 @@ def build_axisymmetric_model(
         )
     else:
         length_function = lambda _time: config.cylinder_length_m
+    radius_function = (
+        radius_data
+        if radius_data is not None
+        else (lambda _time: config.radius_m)
+    )
 
     return AxisymmetricModel(
         radial_intervals=radial_intervals,
         axial_intervals=axial_intervals,
         properties=property_model_for(question),
         environment=environment,
-        radius=radius_data,
+        radius=radius_function,
         length=length_function,
         heat_transfer_coefficient=config.heat_transfer_coefficient,
         mass_transfer_coefficient=config.mass_transfer_coefficient,
-        interface_strategy=resolve_interface_strategy(config.interface_strategy),
+        interface_strategy=resolve_interface_strategy(
+            config.interface_strategy
+            if config.interface_strategy is not None
+            else default_interface_strategy(question)
+        ),
         insulated_ends=insulated_ends,
     )
 
@@ -563,6 +604,16 @@ def parse_args() -> argparse.Namespace:
         help="二维模型把端面改成齐次 Neumann 边界，用于退化测试",
     )
     parser.add_argument(
+        "--include-end-faces",
+        action="store_true",
+        help="一维 interface-scan 计入 2h/L 端面等效源；默认只算圆柱侧面",
+    )
+    parser.add_argument(
+        "--ignore-end-faces",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--question",
         type=int,
         choices=(1, 2, 3, 4),
@@ -593,6 +644,8 @@ def main() -> None:
             grids=grids,
             integrator=args.integrator,
             strategies=strategies,
+            question=args.question,
+            include_end_faces=args.include_end_faces,
         )
         table = render_interface_scan(outcomes, grids)
         (output_dir / "interface_scan.md").write_text(

@@ -186,12 +186,17 @@ class AxisymmetricModel:
             if field == "temperature"
             else self.properties.diffusivity
         )
+        # 只有水分方程存在通量势；传热侧传 None，基尔霍夫策略会退回中点值。
+        flux_potential_function = (
+            None if field == "temperature" else self.properties.flux_potential
+        )
         radial_faces = self.interface_strategy.face_property(
             node_property=node_values.T,
             node_temperature=temperature.T,
             node_moisture=moisture.T,
             node_radii_m=geometry.radial_nodes_m,
             property_function=property_function,
+            flux_potential_function=flux_potential_function,
         )
         axial_faces = self.interface_strategy.face_property(
             node_property=node_values,
@@ -199,6 +204,7 @@ class AxisymmetricModel:
             node_moisture=moisture,
             node_radii_m=geometry.axial_nodes_m,
             property_function=property_function,
+            flux_potential_function=flux_potential_function,
         )
         return radial_faces, axial_faces
 

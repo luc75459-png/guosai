@@ -300,3 +300,134 @@ def write_result4_from_axisymmetric(
             )
         )
     return write_result4_rows(template_path, output_path, rows)
+
+
+# 问题1~3 的官方输出网格：到药材中心的距离 0.0～2.0 cm，步长 0.1 cm。
+RESULT_DISTANCE_CM = np.round(np.arange(0.0, 2.0 + 1.0e-9, 0.1), 4)
+
+# 各题需要写出的物理场，顺序与模板中的工作表顺序一致。
+RESULT_SHEET_FIELDS: dict[int, tuple[str, ...]] = {
+    1: ("temperature", "moisture"),
+    2: ("temperature", "moisture"),
+    3: ("moisture",),
+}
+
+# 各题的输出时间间隔：问题1/2 每 1 s，问题3 每 60 s。
+RESULT_SAVE_EVERY_S: dict[int, float] = {1: 1.0, 2: 1.0, 3: 60.0}
+
+
+def _result_rows_for_question(
+    result: SimulationResult,
+    question: int,
+) -> list[tuple[float, int]]:
+    """按题目要求挑选输出行。
+
+    问题1/2 是定时长输出，取所有大于 0 的等距保存时刻；问题3 以全场达标为
+    终止事件，取 60 s 整数倍并对末行保留连续事件时刻。
+    """
+
+    if question in (3, 4):
+        return _result_rows_for_excel(result, RESULT_SAVE_EVERY_S[question])
+    return [
+        (float(time_s), index)
+        for index, time_s in enumerate(result.time_s)
+        if float(time_s) > 0.0
+    ]
+
+
+def write_result_workbook(
+    template_path: Path,
+    output_path: Path,
+    question: int,
+    model: DryingModel,
+    result: SimulationResult,
+) -> Path:
+    """基于官方模板生成问题 1~3 的 ``result{question}.xlsx``。
+
+    问题1/2 写「温度」「水分浓度」两个工作表，问题3 只写「水分浓度」。
+    半径在这些问题中固定，节点恰好均匀分布在 0～2 cm 上，因此把节点剖面
+    线性插值到题目要求的 0.1 cm 网格即可；所有值保留四位小数。
+    """
+
+    if question not in RESULT_SHEET_FIELDS:
+        raise ValueError("问题编号必须为 1、2、3 之一")
+    if not template_path.exists():
+        raise FileNotFoundError(f"未找到问题 {question} 的结果模板：{template_path}")
+
+    temperature, moisture = split_result(model, result)
+    fields = {"temperature": temperature, "moisture": moisture}
+    rows = _result_rows_for_question(result, question)
+    if not rows:
+        raise ValueError("结果中没有任何可输出的时间点")
+
+    workbook = openpyxl.load_workbook(template_path)
+    worksheet_list = workbook.worksheets
+    wanted = RESULT_SHEET_FIELDS[question]
+    if len(worksheet_list) < len(wanted):
+        raise ValueError(
+            f"问题 {question} 的模板需要 {len(wanted)} 个工作表，"
+            f"实际只有 {len(worksheet_list)} 个"
+        )
+
+    for column_index, field_name in enumerate(wanted):
+        _write_result_sheet(
+            worksheet_list[column_index],
+            fields[field_name],
+            rows,
+            model.radius(0.0),
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+    workbook.close()
+    return output_path
+
+
+def _write_result_sheet(
+    worksheet,
+    field: np.ndarray,
+    rows: list[tuple[float, int]],
+    radius_m: float,
+) -> None:
+    """把一条物理场按官方列结构写入一个工作表。"""
+
+    # 清空模板中的示意内容（含省略号占位行）。
+    for row in range(1, worksheet.max_row + 1):
+        for column in range(1, worksheet.max_column + 1):
+            worksheet.cell(row=row, column=column).value = None
+
+    # 数据单元格共用一个样式对象，避免逐格复制造成的时间与内存开销。
+    shared_style = copy.copy(worksheet.cell(row=2, column=2)._style) if (
+        worksheet.max_row >= 2
+    ) else None
+
+    header = worksheet.cell(row=1, column=1, value="时间\\到药材中心的距离")
+    header.number_format = "General"
+    for column, distance_cm in enumerate(RESULT_DISTANCE_CM, start=2):
+        cell = worksheet.cell(row=1, column=column, value=float(distance_cm))
+        cell.number_format = "0.0"
+
+    worksheet.column_dimensions["A"].width = 20.0
+    for column in range(2, RESULT_DISTANCE_CM.size + 2):
+        worksheet.column_dimensions[
+            openpyxl.utils.get_column_letter(column)
+        ].width = 9.625
+
+    nodes_cm = np.linspace(0.0, radius_m * 100.0, field.shape[1])
+    for row_index, (time_s, state_index) in enumerate(rows, start=2):
+        time_cell = worksheet.cell(row=row_index, column=1, value=round(time_s, 6))
+        time_cell.number_format = "0.0000"
+        if shared_style is not None:
+            time_cell._style = shared_style
+            time_cell.number_format = "0.0000"
+
+        values = np.interp(RESULT_DISTANCE_CM, nodes_cm, field[state_index])
+        for column, raw_value in enumerate(values, start=2):
+            cell = worksheet.cell(
+                row=row_index,
+                column=column,
+                value=_round_output_value(float(raw_value)),
+            )
+            if shared_style is not None:
+                cell._style = shared_style
+            cell.number_format = "0.0000"

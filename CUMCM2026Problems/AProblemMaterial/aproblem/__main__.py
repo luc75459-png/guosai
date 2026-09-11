@@ -10,10 +10,18 @@ import numpy as np
 from .config import ProjectPaths, SimulationConfig
 from .crosscheck import integrate_bdf
 from .interfaces import INTERFACE_STRATEGY_NAMES
-from .outputs import write_preview_files, write_result4_workbook
+from .outputs import (
+    write_preview_files,
+    write_result4_workbook,
+    write_result_workbook,
+)
 from .plotting import plot_final_profiles
-from .scenarios import run_question
-from .validation import validate_result
+from .scenarios import QUESTION_SPECS, run_question
+from .validation import (
+    validate_result,
+    verify_result4_workbook,
+    verify_result_workbook,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,9 +60,11 @@ def parse_args() -> argparse.Namespace:
         help="关闭动态稳定步长，严格使用 --dt 指定的固定步长",
     )
     parser.add_argument(
+        "--no-result",
         "--no-result4",
+        dest="no_result",
         action="store_true",
-        help="问题 4 仅生成预览文件，不写正式 result4.xlsx",
+        help="只生成预览文件，不写正式 resultN.xlsx",
     )
     parser.add_argument(
         "--bdf-check",
@@ -62,15 +72,23 @@ def parse_args() -> argparse.Namespace:
         help="使用 BDF 对同一模型做独立时间积分并比较事件时刻",
     )
     parser.add_argument(
+        "--include-end-faces",
+        action="store_true",
+        help="计入两个端面的 2h/L 等效源；主模型默认不计入，只算圆柱侧面",
+    )
+    parser.add_argument(
         "--ignore-end-faces",
         action="store_true",
-        help="关闭两个端面的轴向平均等效源项，仅计算圆柱侧面换热和传质",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--interface-strategy",
         choices=INTERFACE_STRATEGY_NAMES,
-        default="midpoint",
-        help="界面上导热系数和扩散系数的取值方式，默认为 midpoint",
+        default=None,
+        help=(
+            "水界面上扩散系数的取值方式；不填写时按题号取默认"
+            "（问题1/4 为 midpoint，问题2/3 为 kirchhoff）"
+        ),
     )
     parser.add_argument(
         "--length-scaling",
@@ -97,7 +115,7 @@ def main() -> None:
         dt_s=args.dt,
         radial_intervals=args.intervals,
         adaptive_dt=not args.fixed_dt,
-        include_end_faces=not args.ignore_end_faces,
+        include_end_faces=args.include_end_faces and not args.ignore_end_faces,
         interface_strategy=args.interface_strategy,
         length_scaling=args.length_scaling,
         plateau_mode=args.plateau_mode,
@@ -107,26 +125,41 @@ def main() -> None:
     # 四个问题共用相同入口，只在场景组装阶段切换物性、时长和半径函数。
     model, result = run_question(args.question, paths, config)
     files = list(write_preview_files(output_dir, args.question, model, result))
-    if args.question == 4 and not args.no_result4:
-        files.append(
-            write_result4_workbook(
-                paths.result_template(4),
-                output_dir / "result4.xlsx",
-                model,
-                result,
+    if not args.no_result:
+        if args.question == 4:
+            files.append(
+                write_result4_workbook(
+                    paths.result_template(4),
+                    output_dir / "result4.xlsx",
+                    model,
+                    result,
+                )
             )
-        )
+        else:
+            files.append(
+                write_result_workbook(
+                    paths.result_template(args.question),
+                    output_dir / f"result{args.question}.xlsx",
+                    args.question,
+                    model,
+                    result,
+                )
+            )
     bdf_result = None
     if args.bdf_check:
         event = None
-        if args.question == 4:
+        # 问题3/4 都以"全场最大含水率降到阈值"为终止事件；
+        # 问题1/2 是定时长输出，没有事件。
+        if args.question in (3, 4):
             event = lambda _time, state: float(
                 np.max(state[model.node_count :]) - config.moisture_threshold
             )
         bdf_result = integrate_bdf(
             model.rhs,
             np.asarray(result.state[0], dtype=float),
-            end_time_s=result.time_s[-1],
+            # 用该题的最大时间窗，而不是 Heun 的事件时刻：否则 BDF 的事件
+            # 只要比 Heun 晚一点就落不到窗口内，会被误报成"没有事件"。
+            end_time_s=QUESTION_SPECS[args.question].end_time_s,
             event=event,
         )
     figure_path = output_dir / f"question{args.question}_final_profiles.png"
@@ -162,6 +195,12 @@ def main() -> None:
             f"{result.event_time_s:.3f} s（{result.event_time_s / 3600:.6f} h）"
         )
     print(f"基础验证报告：{report}")
+    result_workbook = output_dir / f"result{args.question}.xlsx"
+    if result_workbook.exists():
+        if args.question == 4:
+            print(verify_result4_workbook(result_workbook))
+        else:
+            print(verify_result_workbook(result_workbook, args.question))
     print("已生成文件：")
     for path in [*files, figure_path]:
         print(f"- {path}")

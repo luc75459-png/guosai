@@ -7,7 +7,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .config import ProjectPaths, SimulationConfig
+from .config import (
+    ProjectPaths,
+    SimulationConfig,
+    default_interface_strategy,
+)
 from .data import load_environment, load_radius
 from .grid import RadialGrid
 from .integrator import EventFunction, SimulationResult, integrate_heun
@@ -105,6 +109,12 @@ def build_question(
         )
 
     grid = RadialGrid(cfg.radial_intervals)
+    # 未显式指定界面策略时按题号取默认（问题2/3 默认基尔霍夫通量势）。
+    interface_strategy_name = (
+        cfg.interface_strategy
+        if cfg.interface_strategy is not None
+        else default_interface_strategy(question)
+    )
     model = DryingModel(
         grid=grid,
         properties=_property_model(question),
@@ -114,7 +124,7 @@ def build_question(
         mass_transfer_coefficient=cfg.mass_transfer_coefficient,
         cylinder_length_m=cfg.cylinder_length_m,
         include_end_faces=cfg.include_end_faces,
-        interface_strategy=resolve_interface_strategy(cfg.interface_strategy),
+        interface_strategy=resolve_interface_strategy(interface_strategy_name),
         length_function=length_function,
     )
     node_count = model.node_count

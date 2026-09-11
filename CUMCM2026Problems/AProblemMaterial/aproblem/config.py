@@ -57,6 +57,31 @@ class ProjectPaths:
         return self.attachments / "附件3" / f"result{question}.xlsx"
 
 
+# 各题默认的界面扩散系数取法。
+#
+# 问题2/3 的干燥时长由 D(C,T) 跨越约四个数量级主导，界面取值直接决定答案，
+# 因此默认用通量势（基尔霍夫）取法 D_face = ΔΦ/ΔC：它是唯一能让两点有限体积
+# 通量格式与真实通量严格相等的取值，不含自由参数，网格收敛也最快。
+#
+# 问题1 只有 30 min、水分几乎没有移动（渗透深度约 0.4 cm），界面取法对结果
+# 影响可忽略，保持既有的中点点值；问题4 的正式结果已按中点值定稿，暂不改动。
+DEFAULT_INTERFACE_STRATEGY_BY_QUESTION: dict[int, str] = {
+    1: "midpoint",
+    2: "kirchhoff",
+    3: "kirchhoff",
+    4: "midpoint",
+}
+
+
+def default_interface_strategy(question: int) -> str:
+    """返回指定问题的默认界面策略名称。"""
+
+    try:
+        return DEFAULT_INTERFACE_STRATEGY_BY_QUESTION[question]
+    except KeyError as error:
+        raise ValueError(f"不支持的问题编号：{question}") from error
+
+
 @dataclass(frozen=True)
 class SimulationConfig:
     """四问共享的数值模拟配置，内部单位统一采用 SI 制。
@@ -78,10 +103,14 @@ class SimulationConfig:
     moisture_threshold: float = 0.15
     plateau_temperature_c: float = 50.0
     plateau_moisture: float = 0.05
-    include_end_faces: bool = True
-    # 主方案：中点点值。扫描结果见 outputs/study/interface_scan.md：
-    # N=40→80 相对变化 0.046%，而调和平均与串联阻力式仍有约 2% 的漂移。
-    interface_strategy: str = "midpoint"
+    # 主模型一律只算圆柱侧面，不计入两个端面的 2h/L 等效源。
+    # 问题4 的二维轴对称校验已经证明该闭合把端面影响高估约 45%
+    # （中截面按对称性没有轴向通量，不该获得端面失水的好处）；
+    # 问题1~3 用同一口径，保证四问的几何假设一致。
+    include_end_faces: bool = False
+    # 留空表示"按题号取默认"，见 DEFAULT_INTERFACE_STRATEGY_BY_QUESTION；
+    # 显式赋值（含命令行 --interface-strategy）时以显式值为准。
+    interface_strategy: str | None = None
     length_scaling: str = "constant"
     plateau_mode: str = "fixed"
 
@@ -100,7 +129,10 @@ class SimulationConfig:
             raise ValueError("时间步安全系数 dt_safety_factor 必须位于 (0, 1] 区间")
         if self.initial_moisture <= 0:
             raise ValueError("初始干基含水率 initial_moisture 必须为正数")
-        if self.interface_strategy not in INTERFACE_STRATEGY_NAMES:
+        if (
+            self.interface_strategy is not None
+            and self.interface_strategy not in INTERFACE_STRATEGY_NAMES
+        ):
             raise ValueError(
                 "界面策略 interface_strategy 必须为 "
                 + "、".join(INTERFACE_STRATEGY_NAMES)
