@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .interfaces import INTERFACE_STRATEGY_NAMES
+
 
 @dataclass(frozen=True)
 class ProjectPaths:
@@ -77,6 +79,11 @@ class SimulationConfig:
     plateau_temperature_c: float = 50.0
     plateau_moisture: float = 0.05
     include_end_faces: bool = True
+    # 主方案：中点点值。扫描结果见 outputs/study/interface_scan.md：
+    # N=40→80 相对变化 0.046%，而调和平均与串联阻力式仍有约 2% 的漂移。
+    interface_strategy: str = "midpoint"
+    length_scaling: str = "constant"
+    plateau_mode: str = "fixed"
 
     def validate(self) -> None:
         """在运行前检查会导致求解失败的基础参数。"""
@@ -93,3 +100,12 @@ class SimulationConfig:
             raise ValueError("时间步安全系数 dt_safety_factor 必须位于 (0, 1] 区间")
         if self.initial_moisture <= 0:
             raise ValueError("初始干基含水率 initial_moisture 必须为正数")
+        if self.interface_strategy not in INTERFACE_STRATEGY_NAMES:
+            raise ValueError(
+                "界面策略 interface_strategy 必须为 "
+                + "、".join(INTERFACE_STRATEGY_NAMES)
+            )
+        if self.length_scaling not in ("constant", "isotropic"):
+            raise ValueError("长度模式 length_scaling 必须为 constant 或 isotropic")
+        if self.plateau_mode not in ("fixed", "last_value"):
+            raise ValueError("边界延拓模式 plateau_mode 必须为 fixed 或 last_value")

@@ -88,10 +88,19 @@ def load_environment(
     path: Path,
     plateau_temperature_c: float = 50.0,
     plateau_moisture: float = 0.05,
+    hold_last_value: bool = False,
 ) -> EnvironmentBoundary:
-    """读取附件1并生成烘房环境边界函数。"""
+    """读取附件1并生成烘房环境边界函数。
+
+    ``hold_last_value`` 为真时，附件时间范围以外保持附件最后一行的
+    实测值，而不是使用理论恒温段的 50 ℃、0.05 kg/kg；两种延拓方式
+    作为敏感性分析的一个维度。
+    """
 
     values = _read_numeric_columns(path, expected_columns=3)
+    if hold_last_value:
+        plateau_temperature_c = float(values[-1, 1])
+        plateau_moisture = float(values[-1, 2])
     return EnvironmentBoundary(
         time_s=values[:, 0],
         temperature_c=values[:, 1],

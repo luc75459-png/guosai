@@ -57,6 +57,7 @@ def write_preview_files(
         radius_m=radius_m,
         cylinder_length_m=model.cylinder_length_m,
         include_end_faces=model.include_end_faces,
+        interface_strategy=np.array(model.interface_strategy.name),
         event_time_s=np.nan if result.event_time_s is None else result.event_time_s,
         step_s=np.asarray([]) if result.step_s is None else result.step_s,
     )
@@ -171,12 +172,40 @@ def write_result4_workbook(
     药材半径的位置保持空白，不填零；所有水分值保留四位小数。
     """
 
+    _, moisture = split_result(model, result)
+    rows: list[tuple[float, list[float | None], float]] = []
+    for time_s, state_index in _result_rows_for_excel(result):
+        physical_values, surface_value = map_material_profile_to_physical(
+            moisture[state_index],
+            model.radius(time_s),
+        )
+        rows.append(
+            (
+                time_s,
+                [_round_output_value(value) for value in physical_values],
+                float(surface_value),
+            )
+        )
+    return write_result4_rows(template_path, output_path, rows)
+
+
+def write_result4_rows(
+    template_path: Path,
+    output_path: Path,
+    rows: list[tuple[float, list[float | None], float]],
+) -> Path:
+    """把已映射到固定物理距离的结果行写入官方模板。
+
+    ``rows`` 的每一项是 ``(时间, 20 个固定距离处的值, 表面值)``；固定
+    距离处允许为 ``None``（表示该位置已在药材之外），表面值必须有效。
+    一维拟一维模型和二维轴对称模型都通过本函数导出，保证格式一致。
+    """
+
     if not template_path.exists():
         raise FileNotFoundError(f"未找到问题 4 结果模板：{template_path}")
 
     workbook = openpyxl.load_workbook(template_path)
     worksheet = workbook.active
-    _, moisture = split_result(model, result)
 
     base_header_style = copy.copy(worksheet.cell(row=1, column=2)._style)
 
@@ -201,23 +230,16 @@ def write_result4_workbook(
     _copy_cell_style(worksheet.cell(row=1, column=2), surface_header)
     worksheet.cell(row=1, column=1)._style = copy.copy(base_header_style)
 
-    excel_rows = _result_rows_for_excel(result)
-    for row_index, (time_s, state_index) in enumerate(excel_rows, start=2):
-        radius_m = model.radius(time_s)
-        physical_values, surface_value = map_material_profile_to_physical(
-            moisture[state_index],
-            radius_m,
-        )
-
+    for row_index, (time_s, physical_values, surface_value) in enumerate(rows, start=2):
         time_cell = worksheet.cell(row=row_index, column=1, value=round(time_s, 6))
         _copy_cell_style(worksheet.cell(row=2, column=1), time_cell)
         time_cell.number_format = "0.0000"
 
-        for column, value in enumerate(physical_values, start=2):
+        for column, raw_value in enumerate(physical_values, start=2):
             cell = worksheet.cell(
                 row=row_index,
                 column=column,
-                value=_round_output_value(value),
+                value=raw_value,
             )
             _copy_cell_style(worksheet.cell(row=2, column=column), cell)
             cell.number_format = "0.0000"
@@ -239,3 +261,42 @@ def write_result4_workbook(
     workbook.save(output_path)
     workbook.close()
     return output_path
+
+
+def write_result4_from_axisymmetric(
+    template_path: Path,
+    output_path: Path,
+    time_s: np.ndarray,
+    radius_m: np.ndarray,
+    axial_averaged_profiles: np.ndarray,
+    save_every_s: float = 60.0,
+) -> Path:
+    """从二维轴对称解导出 ``result4.xlsx``。
+
+    题目只要求给出到中心距离的结果，因此先把二维场沿轴向做平均，得到
+    ``C_radial(xi, t)``，再按当前半径映射到固定物理距离。超出当前半径
+    的位置留空，表面列取 ``xi = 1`` 的轴向平均值。
+    """
+
+    times = np.asarray(time_s, dtype=float)
+    fractions = np.asarray(radius_m, dtype=float)
+    profiles = np.asarray(axial_averaged_profiles, dtype=float)
+    if not (times.shape[0] == fractions.shape[0] == profiles.shape[0]):
+        raise ValueError("时间、半径和剖面的行数必须一致")
+
+    rows: list[tuple[float, list[float | None], float]] = []
+    for index, value in enumerate(times):
+        if value < save_every_s - 1.0e-7 and index != times.size - 1:
+            continue
+        mapped, surface_value = map_material_profile_to_physical(
+            profiles[index],
+            float(fractions[index]),
+        )
+        rows.append(
+            (
+                float(value),
+                [_round_output_value(item) for item in mapped],
+                float(surface_value),
+            )
+        )
+    return write_result4_rows(template_path, output_path, rows)

@@ -9,6 +9,7 @@ import numpy as np
 
 from .config import ProjectPaths, SimulationConfig
 from .crosscheck import integrate_bdf
+from .interfaces import INTERFACE_STRATEGY_NAMES
 from .outputs import write_preview_files, write_result4_workbook
 from .plotting import plot_final_profiles
 from .scenarios import run_question
@@ -65,6 +66,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="关闭两个端面的轴向平均等效源项，仅计算圆柱侧面换热和传质",
     )
+    parser.add_argument(
+        "--interface-strategy",
+        choices=INTERFACE_STRATEGY_NAMES,
+        default="midpoint",
+        help="界面上导热系数和扩散系数的取值方式，默认为 midpoint",
+    )
+    parser.add_argument(
+        "--length-scaling",
+        choices=("constant", "isotropic"),
+        default="constant",
+        help="药材长度模式：constant 保持 0.25 m，isotropic 与半径同步收缩",
+    )
+    parser.add_argument(
+        "--plateau-mode",
+        choices=("fixed", "last_value"),
+        default="fixed",
+        help="附件时间范围以外的烘房条件：fixed 用 50 ℃/0.05，last_value 保持附件末值",
+    )
     return parser.parse_args()
 
 
@@ -79,7 +98,11 @@ def main() -> None:
         radial_intervals=args.intervals,
         adaptive_dt=not args.fixed_dt,
         include_end_faces=not args.ignore_end_faces,
+        interface_strategy=args.interface_strategy,
+        length_scaling=args.length_scaling,
+        plateau_mode=args.plateau_mode,
     )
+    config.validate()
 
     # 四个问题共用相同入口，只在场景组装阶段切换物性、时长和半径函数。
     model, result = run_question(args.question, paths, config)
@@ -111,6 +134,12 @@ def main() -> None:
     report = validate_result(model, result)
 
     print(f"问题 {args.question} 计算完成，最终时刻：{result.time_s[-1]:.3f} s")
+    print(
+        f"界面策略：{model.interface_strategy.name}；"
+        f"长度模式：{args.length_scaling}；"
+        f"边界延拓：{args.plateau_mode}；"
+        f"端面：{'计入' if model.include_end_faces else '忽略'}"
+    )
     if result.step_s is not None and result.step_s.size:
         print(
             "实际内部时间步范围："

@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+import openpyxl
 
 from .integrator import SimulationResult
 from .model import DryingModel
@@ -95,4 +97,112 @@ def validate_result(model: DryingModel, result: SimulationResult) -> ValidationR
         temperature_bounds_c=(float(np.min(temperature)), float(np.max(temperature))),
         moisture_bounds=(float(np.min(moisture)), float(np.max(moisture))),
         final_max_moisture=float(np.max(moisture[-1])),
+    )
+
+
+# 问题4结果文件的固定列：0.0～1.9 cm 加一列"药材表面"。
+RESULT4_DISTANCE_CM = tuple(round(0.1 * index, 1) for index in range(20))
+SURFACE_COLUMN_TITLE = "药材表面"
+
+
+@dataclass(frozen=True)
+class Result4Check:
+    """问题4结果工作簿的自动回读校验结果。"""
+
+    sheet_name: str
+    data_rows: int
+    issues: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        """所有检查项是否全部通过。"""
+
+        return not self.issues
+
+    def __str__(self) -> str:
+        """输出中文校验摘要。"""
+
+        if self.passed:
+            return (
+                f"result4 回读校验通过：工作表 {self.sheet_name}，"
+                f"数据 {self.data_rows} 行"
+            )
+        return "result4 回读校验未通过：" + "；".join(self.issues)
+
+
+def verify_result4_workbook(path: Path) -> Result4Check:
+    """回读问题4结果工作簿，逐项检查题目要求的格式。
+
+    检查内容：工作表名、表头（20 个固定距离加"药材表面"）、时间列严格
+    递增且为 60 s 的整数倍（末行允许是连续事件时刻）、超出当前半径的
+    固定距离单元为空、表面列非空、数值单元格为四位小数格式。
+    """
+
+    if not path.exists():
+        return Result4Check(path.stem, 0, (f"未找到文件：{path}",))
+
+    workbook = openpyxl.load_workbook(path, data_only=True)
+    worksheet = workbook.active
+    issues: list[str] = []
+
+    expected_header: list[object] = list(RESULT4_DISTANCE_CM) + [SURFACE_COLUMN_TITLE]
+    header = [worksheet.cell(row=1, column=column).value for column in range(2, 23)]
+    for index, (actual, expected) in enumerate(zip(header, expected_header), start=2):
+        if isinstance(expected, str):
+            if actual != expected:
+                issues.append(f"第{index}列表头应为{expected}，实际为{actual!r}")
+        elif actual is None or not np.isclose(float(actual), expected, atol=1.0e-9):
+            issues.append(f"第{index}列表头应为{expected}，实际为{actual!r}")
+
+    if worksheet.max_column > 22:
+        # 模板里的省略号占位列必须被清空。
+        for column in range(23, worksheet.max_column + 1):
+            if worksheet.cell(row=1, column=column).value is not None:
+                issues.append(f"第{column}列存在多余表头")
+
+    times: list[float] = []
+    for row in range(2, worksheet.max_row + 1):
+        value = worksheet.cell(row=row, column=1).value
+        if value is None:
+            continue
+        times.append(float(value))
+
+    if not times:
+        issues.append("时间列没有任何数据")
+    else:
+        if any(later <= earlier for earlier, later in zip(times, times[1:])):
+            issues.append("时间列不是严格递增")
+        for time_s in times[:-1]:
+            if not np.isclose(time_s % 60.0, 0.0, atol=1.0e-6):
+                issues.append(f"时间 {time_s} s 不是 60 s 的整数倍")
+                break
+
+    for row, time_s in enumerate(times, start=2):
+        blanks: list[int] = []
+        for column in range(2, 22):
+            if worksheet.cell(row=row, column=column).value is None:
+                blanks.append(column)
+        if blanks and blanks != list(range(blanks[0], 22)):
+            issues.append(f"第{row}行的空白单元不连续，超出半径的位置应全部为空")
+            break
+        if worksheet.cell(row=row, column=22).value is None:
+            issues.append(f"第{row}行的药材表面列不得为空")
+            break
+        for column in range(2, 23):
+            cell = worksheet.cell(row=row, column=column)
+            if cell.value is None:
+                continue
+            if cell.number_format != "0.0000":
+                issues.append(f"第{row}行第{column}列不是四位小数格式")
+                break
+            if not np.isfinite(float(cell.value)):
+                issues.append(f"第{row}行第{column}列不是有限数")
+                break
+
+    sheet_name = worksheet.title
+    workbook.close()
+    return Result4Check(
+        sheet_name=sheet_name,
+        data_rows=len(times),
+        issues=tuple(issues),
     )
