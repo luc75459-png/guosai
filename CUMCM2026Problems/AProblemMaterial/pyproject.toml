@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cumcm-a-drying-material"
+version = "0.2.0"
+description = "Material-coordinate numerical model for CUMCM 2026 Problem A"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+# 只搜索实际 Python 包，避免把 outputs 等普通目录误判为命名空间包。
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aproblem*"]
+exclude = ["outputs*", "tests*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
