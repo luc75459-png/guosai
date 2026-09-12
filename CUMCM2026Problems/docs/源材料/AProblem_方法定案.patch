@@ -1,0 +1,586 @@
+From d1f0bca0b39e7829d0523c74a4466607835668c6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 12 Sep 2026 02:34:49 +0000
+Subject: [PATCH] =?UTF-8?q?=E6=96=B9=E6=B3=95=E5=B1=82=E9=9D=A2=E5=AE=9A?=
+ =?UTF-8?q?=E6=A1=88=EF=BC=9A=E5=9F=BA=E5=B0=94=E9=9C=8D=E5=A4=AB=E7=95=8C?=
+ =?UTF-8?q?=E9=9D=A2=E5=8F=96=E6=B3=95=E3=80=81=E7=AB=AF=E9=9D=A2=E9=BB=98?=
+ =?UTF-8?q?=E8=AE=A4=E5=85=B3=E9=97=AD=E3=80=81=E5=88=86=E9=97=AE=E7=BD=91?=
+ =?UTF-8?q?=E6=A0=BC=E3=80=81=E5=AF=BC=E5=87=BA=E9=A2=98=E7=9B=AE=E6=A0=BC?=
+ =?UTF-8?q?=E5=BC=8F=E7=BB=93=E6=9E=9C?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+界面扩散系数
+  改用由通量守恒唯一确定的 D_face = ΔΦ/ΔC，Φ 为基尔霍夫通量势。三套附录的 D
+  都是 A(T)·exp(-b/C) 形式，Φ 有初等解析原函数 A(T)[C·e^{-b/C} - b·E₁(b/C)]，
+  不需要数值求积，实测比五点高斯还快 31%。ΔΦ 是两个相近大数之差，|ΔC| 小时
+  会抵消（ΔC~1e-9 时相对误差已达 1e-6），故在 |ΔC| < 1e-6·C 时退回中点值。
+
+  原「调和/算术校准混合」弃用但保留，仅供论文的稳健性对照。该取法解决的坑是
+  真的——纯调和平均在 t=30 h 的 L∞ 误差比正确取法大约 2200 倍——但它的权重要按
+  参考答案反标且每问重标一次（0.7247 / 0.8705），而反解出的「所需权重」随含水率
+  从 4.0 变到 0.61 并跨越 1，任何固定的 w∈[0,1] 都不可能等价于守恒律给出的值。
+
+  界面导热系数由调和平均改为算术平均：k 在本题只变 2.3 倍且连续无间断，
+  调和平均的「串联分层」前提不成立。
+
+端面
+  include_end_faces 默认由 True 改为 False。把两端面的对流通量摊成体积源项要求
+  轴向分布接近平坦，而本题轴向渗透深度远小于半长：按该源项估算，轴心因端面产生的
+  失水时间常数约 44 h，与整个干燥过程同量级，等于给轴心开了一条绕过内部扩散的通道。
+  二维轴对称计算已证实 t=1800 s 时端面影响的轴向范围仅 1.62 cm，中截面径向分布
+  与一维解一致到 1e-7 ℃。--end-faces 仅保留作对照。
+
+网格
+  新增 recommended_intervals=(160,160,80,80)，按题号取用，并校验必须是 20 的倍数
+  （R=2 cm、21 个上报位置，20 的倍数才能让节点精确落位、不引入插值误差）。
+  倍数由各问自己的收敛实验定：问题1、2 上报四位小数，GCI ≤ 0.024%；
+  问题3、4 的达标时刻 GCI = 0.0062%（约 13 秒）。
+
+输出
+  新增 aproblem/official.py，直接导出题目模板格式的 result1~4.xlsx
+  （工作表名、起始时刻、21 列表头均按官方模板核对）。
+  新增 --intervals / --end-faces / --no-official 三个开关。
+
+核验
+  与另一套独立实现（代码骨架）对拍：问题1 的 result1.xlsx 逐格相同；
+  问题2 的 t=10800 s 全部一致；问题3 达标时刻 57.475073 h vs 57.4751 h，差约 0.1 秒。
+  单元测试 9 项全过。
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011EAbo1y2gA1B5WNqQN5MZJ
+---
+ CUMCM2026Problems/AProblem/README.md          | 61 ++++++++++--
+ .../AProblem/aproblem/__main__.py             | 31 +++++-
+ CUMCM2026Problems/AProblem/aproblem/config.py | 27 ++++-
+ CUMCM2026Problems/AProblem/aproblem/model.py  | 60 ++++++++++--
+ .../AProblem/aproblem/official.py             | 98 +++++++++++++++++++
+ .../AProblem/aproblem/physics.py              | 45 +++++++++
+ .../AProblem/aproblem/scenarios.py            | 13 +--
+ 7 files changed, 300 insertions(+), 35 deletions(-)
+ create mode 100644 CUMCM2026Problems/AProblem/aproblem/official.py
+
+diff --git a/CUMCM2026Problems/AProblem/README.md b/CUMCM2026Problems/AProblem/README.md
+index 9529909..2eb6ae5 100644
+--- a/CUMCM2026Problems/AProblem/README.md
++++ b/CUMCM2026Problems/AProblem/README.md
+@@ -78,17 +78,50 @@ python -m pytest                        # 运行 tests/ 中的全部测试
+ python -c "import numpy, pandas, scipy, matplotlib, openpyxl, pytest; print('全部依赖安装成功')"  # 任一包缺失时会直接显示包名
+ ```
+ 
+-## 快速开始
++## 快速开始：自己跑出前三问的正式答案
+ 
+-完成上面的任意一种环境安装方案后，在 `AProblem` 目录执行。每个问题都必须分别计算“考虑端面”和“不考虑端面”两种工况；以下以问题1为例：
++完成环境安装后，在 `AProblem` 目录依次执行这四条命令。**默认配置就是论文用的配置**
++（端面关闭、基尔霍夫界面、按题号取推荐网格），不需要额外加参数。
+ 
+ ```powershell
+-python -m pytest  # 再次确认当前代码和环境通过全部单元测试
+-python -m aproblem --question 1 --output-dir "outputs\问题1\考虑端面"  # 计算问题1的复杂工况：计入两个端面，结果单独保存
+-python -m aproblem --question 1 --ignore-end-faces --output-dir "outputs\问题1\不考虑端面"  # 计算问题1的简单工况：只计圆柱侧面，结果单独保存
++python -m pytest                                              # 先确认环境和代码通过全部单元测试
++
++python -m aproblem --question 1 --dt 0.02 --output-dir "outputs\问题1"   # 约 1 分钟
++python -m aproblem --question 2 --dt 0.02 --output-dir "outputs\问题2"   # 约 8 分钟
++python -m aproblem --question 3 --dt 0.05 --output-dir "outputs\问题3"   # 约 40 分钟
++```
++
++每条命令都会在对应目录下生成 **`result1.xlsx` / `result2.xlsx` / `result3.xlsx`**，
++就是直接交上去的那个格式（工作表名、起始时刻、21 列表头都已按官方模板核对）。
++同时还会生成 `question*.npz`（全精度原始数据）、两个预览 CSV 和一张剖面图。
++
++跑完之后可以这样自查：
++
++| 问题 | 终端会打印 | 应该看到 |
++|---|---|---|
++| 1 | 温度范围 | `28.0000～36.7856 ℃` |
++| 2 | 含水率范围 | 下限 `1.008118` |
++| 3 | 达到含水率阈值的时刻 | `≈ 206910 s（57.475 h）` |
++
++**为什么 `--dt` 要这么给。** 程序用的是固定步长的显式格式，稳定步长随网格加密按
++\(1/N^2\) 收紧：问题1 的推荐网格 \(N=160\) 对应稳定上限约 0.023 s，问题3 的
++\(N=80\) 对应约 0.086 s。另外 `--dt` 必须能整除保存间隔（问题1、2 是 1 s，问题3 是 60 s），
++所以取 0.02 和 0.05。步长给大了程序会发散并报错，不会静默给出错误答案。
++
++### 想改配置时的开关
++
++```powershell
++python -m aproblem --question 3 --intervals 40 --dt 0.1 --output-dir "outputs\粗网格对照"  # 换网格，必须是 20 的倍数
++python -m aproblem --question 1 --dt 0.02 --end-faces --output-dir "outputs\端面对照"       # 打开端面源项（仅供对照，见下文）
++python -m aproblem --question 1 --dt 0.02 --no-official --output-dir "outputs\只要预览"     # 不导出 result*.xlsx
+ ```
+ 
+-其中，不添加 `--ignore-end-faces` 时，程序默认**考虑两个端面**；添加 `--ignore-end-faces` 时，程序**不考虑两个端面**。两次计算必须指定不同的 `--output-dir`，否则同名结果文件可能被后一次运行覆盖。
++`--intervals` 不给时按题号取推荐值：问题1、2 为 160，问题3、4 为 80。
++这些值由各问自己的网格收敛实验定出，理由写在 `config.py` 的注释里。
++
++**端面默认是关闭的。** 早期版本默认打开，那是不对的——把两端面的对流通量摊成体积源项
++要求轴向分布接近平坦，而本题的轴向渗透深度远小于半长，该前提不成立。
++`--end-faces` 只保留作对照，正式结果一律不含端面。
+ 
+ 如果 PowerShell 因执行策略阻止激活脚本，可以先在当前终端临时执行 `Set-ExecutionPolicy -Scope Process Bypass`，关闭该终端后设置会自动失效。
+ 
+@@ -197,10 +230,18 @@ python -m aproblem --question 1 --dt 0.25 --ignore-end-faces --output-dir "outpu
+ ## 当前约定
+ 
+ - 所有内部计算使用 SI 单位：m、s、K/Celsius 差值、kg/kg。
+-- 圆柱长度默认为 0.25 m；四问默认计入两个端面的等效换热和失水贡献。
+-- 固定半径问题使用 20 个径向区间，即 21 个节点，恰好对应 0.0-2.0 cm、间隔 0.1 cm。
+-- 默认内部步长 0.5 s。问题1、2分别每1 s保存，问题3、4每60 s保存。
+-- 问题2/3的界面扩散系数采用调和平均与算术平均的校准混合，算术平均权重默认为 0.7247；问题1和问题4仍使用调和平均。
++- 圆柱长度默认为 0.25 m；**四问默认不计端面**，只保留侧面的对流换热与传质。
++- 径向区间数必须是 20 的倍数：`R=2` cm、题目要求 0.0~2.0 cm 共 21 个上报位置，
++  取 20 的倍数才能让节点精确落在上报位置上，不引入插值误差。倍数由各问自己的网格
++  收敛实验定：问题1、2 为 160（上报四位小数，GCI ≤ 0.024%），问题3、4 为 80
++  （达标时刻 GCI = 0.0062%，约 13 秒）。
++- 默认内部步长 0.5 s，实际运行需按网格调小（见「快速开始」）。问题1、2 每 1 s 保存，问题3、4 每 60 s 保存。
++- **界面扩散系数取基尔霍夫通量势的差商** \(D_\text{face}=\Delta\Phi/\Delta C\)，其中
++  \(\Phi(C)=\int_0^C D\,\mathrm dc\)。三套附录的 \(D\) 都是 \(A(T)\mathrm e^{-b/C}\) 形式，
++  \(\Phi\) 有初等解析原函数 \(\Phi=A(T)[C\mathrm e^{-b/C}-b E_1(b/C)]\)，不需要数值求积。
++  该取法由通量守恒唯一确定，不含自由参数。早先的「调和/算术校准混合」已弃用，
++  仅保留在 `model.calibrated_diffusivity_mean` 中供稳健性对照。
++- 界面导热系数取算术平均（\(k\) 在本题只变 2.3 倍且连续，各取法相差不到 1%）。
+ - 问题3、4在附件1结束后将烘房条件保持为 50°C 和 0.05 kg/kg。
+ - `outputs` 目前输出便于检查的 NPZ 和 CSV；官方 result*.xlsx 的模板填充单独实现，避免早期调试覆盖模板。
+ - 问题4的预览 CSV 使用归一化半径 `xi=r/R(t)` 作为列；NPZ 同时保存每个输出时刻的实际半径，正式导出时再插值到题目要求的物理距离。
+diff --git a/CUMCM2026Problems/AProblem/aproblem/__main__.py b/CUMCM2026Problems/AProblem/aproblem/__main__.py
+index 82daf84..bbf9e29 100644
+--- a/CUMCM2026Problems/AProblem/aproblem/__main__.py
++++ b/CUMCM2026Problems/AProblem/aproblem/__main__.py
+@@ -5,7 +5,10 @@ from __future__ import annotations
+ import argparse
+ from pathlib import Path
+ 
++import numpy as np
++
+ from .config import ProjectPaths, SimulationConfig
++from .official import write_official_result
+ from .outputs import write_preview_files
+ from .plotting import plot_final_profiles
+ from .scenarios import run_question
+@@ -36,6 +39,22 @@ def parse_args() -> argparse.Namespace:
+         help="结果输出目录；不填写时使用项目内的 outputs 目录",
+     )
+     parser.add_argument("--dt", type=float, default=0.5, help="内部时间步长（秒）")
++    parser.add_argument(
++        "--intervals",
++        type=int,
++        default=0,
++        help="径向区间数，必须是 20 的倍数；默认按题号取推荐值（问题1/2 为 160，问题3/4 为 80）",
++    )
++    parser.add_argument(
++        "--end-faces",
++        action="store_true",
++        help="打开端面等效体积源项。默认关闭；该闭合已被二维轴对称计算证伪，仅供对照",
++    )
++    parser.add_argument(
++        "--no-official",
++        action="store_true",
++        help="只生成预览文件，不导出题目格式的 result*.xlsx",
++    )
+     parser.add_argument(
+         "--ignore-end-faces",
+         action="store_true",
+@@ -52,17 +71,25 @@ def main() -> None:
+     output_dir = (args.output_dir or paths.outputs).resolve()
+     config = SimulationConfig(
+         dt_s=args.dt,
+-        include_end_faces=not args.ignore_end_faces,
++        radial_intervals=args.intervals if args.intervals else 20,
++        include_end_faces=args.end_faces and not args.ignore_end_faces,
+     )
+ 
+     # 四个问题共用相同入口，只在场景组装阶段切换物性、时长和半径函数。
+     model, result = run_question(args.question, paths, config)
+     files = write_preview_files(output_dir, args.question, model, result)
++    if not args.no_official:
++        radius_m = np.array([model.radius(t) for t in result.time_s])
++        files.append(
++            write_official_result(output_dir, args.question, model, result, radius_m)
++        )
+     figure_path = output_dir / f"question{args.question}_final_profiles.png"
+     plot_final_profiles(figure_path, model, result)
+     report = validate_result(model, result)
+ 
+-    print(f"问题 {args.question} 计算完成，最终时刻：{result.time_s[-1]:.3f} s")
++    print(f"问题 {args.question} 计算完成，径向区间数 {model.node_count - 1}，"
++          f"端面{'开启' if model.include_end_faces else '关闭'}，"
++          f"最终时刻：{result.time_s[-1]:.3f} s")
+     if result.event_time_s is not None:
+         print(
+             "达到含水率阈值的时刻："
+diff --git a/CUMCM2026Problems/AProblem/aproblem/config.py b/CUMCM2026Problems/AProblem/aproblem/config.py
+index 533473a..fa0d541 100644
+--- a/CUMCM2026Problems/AProblem/aproblem/config.py
++++ b/CUMCM2026Problems/AProblem/aproblem/config.py
+@@ -56,20 +56,33 @@ class SimulationConfig:
+     cylinder_length_m: float = 0.25
+     radial_intervals: int = 20
+     dt_s: float = 0.5
++    # 各问推荐的径向区间数（不指定 radial_intervals 时按题号取用）。
++    # 取值一律是 20 的倍数：R=2 cm、题目要求 0.0~2.0 cm 共 21 个上报位置，
++    # 20 的倍数保证节点精确落在上报位置上，不需要插值。
++    # 倍数由各问自己的网格收敛实验定：
++    #   问题1  N=160  上报四位小数，p=2.11、GCI=0.024%、绝对不确定度 4e-5
++    #   问题2  N=160  四个上报量 p≈2.0、GCI≤0.00065%、绝对 ≤6.5e-6
++    #   问题3  N=80   达标时刻 p=1.91、GCI=0.0062%（13 秒）
++    #   问题4  N=80   与问题3 同口径
++    recommended_intervals: tuple[int, int, int, int] = (160, 160, 80, 80)
+     initial_temperature_c: float = 28.0
+     initial_moisture: float = 2.55
+     heat_transfer_coefficient: float = 25.0
+     mass_transfer_coefficient: float = 8.0e-7
+-    # 问题2/3的变扩散系数界面插值权重：0 为纯调和平均，1 为纯算术平均。
+-    # 0.7247 由问题2/3参考剖面与问题3达标时刻联合校准得到。
++    # 【已弃用】调和/算术凸组合的权重，现仅用于论文的界面取法稳健性对照。
++    # 正式计算改用基尔霍夫通量势 D_face = ΔΦ/ΔC（见 model.kirchhoff_diffusivity_mean）。
+     question23_diffusivity_arithmetic_weight: float = 0.7247
+-    # 问题4使用不同物性和收缩网格，必须单独校准，不能沿用问题2/3权重。
+-    # 该值由“仅侧面”参考剖面和 51.087074 h 达标时刻联合标定。
++    # 【已弃用】同上，问题4 的对照权重。
+     question4_diffusivity_arithmetic_weight: float = 0.8705
+     moisture_threshold: float = 0.15
+     plateau_temperature_c: float = 50.0
+     plateau_moisture: float = 0.05
+-    include_end_faces: bool = True
++    # 端面默认关闭。把两端面的对流通量摊成体积源项，要求轴向分布接近平坦，
++    # 而本题的轴向渗透深度远小于半长，该前提不成立：按源项估算，轴心因端面产生的
++    # 失水时间常数约 44 h，与整个干燥过程同量级，等于给轴心开了一条绕过内部扩散的
++    # 通道。二维轴对称计算已验证 t=1800 s 时端面影响的轴向范围仅 1.62 cm，
++    # 中截面的径向分布与一维解一致到 1e-7 ℃。正式结果一律取"不含端面"。
++    include_end_faces: bool = False
+ 
+     def validate(self) -> None:
+         """在运行前检查会导致求解失败的基础参数。"""
+@@ -84,6 +97,10 @@ class SimulationConfig:
+             raise ValueError("内部时间步长 dt_s 必须为正数")
+         if self.initial_moisture <= 0:
+             raise ValueError("初始干基含水率 initial_moisture 必须为正数")
++        if len(self.recommended_intervals) != 4:
++            raise ValueError("recommended_intervals 必须给出四个问题的网格数")
++        if any(n % 20 for n in self.recommended_intervals):
++            raise ValueError("径向区间数必须是 20 的倍数，否则上报位置需要插值")
+         if not 0.0 <= self.question23_diffusivity_arithmetic_weight <= 1.0:
+             raise ValueError("问题2/3扩散系数算术平均权重必须位于 0～1")
+         if not 0.0 <= self.question4_diffusivity_arithmetic_weight <= 1.0:
+diff --git a/CUMCM2026Problems/AProblem/aproblem/model.py b/CUMCM2026Problems/AProblem/aproblem/model.py
+index 56265bd..e527597 100644
+--- a/CUMCM2026Problems/AProblem/aproblem/model.py
++++ b/CUMCM2026Problems/AProblem/aproblem/model.py
+@@ -33,11 +33,15 @@ def calibrated_diffusivity_mean(
+     right: np.ndarray,
+     arithmetic_weight: float,
+ ) -> np.ndarray:
+-    """计算校准后的界面扩散系数。
++    """【已弃用，仅供对照】调和平均与算术平均的凸组合。
+ 
+-    纯调和平均会让低含水率外层形成过强的数值瓶颈，使问题3的中心干燥
+-    明显慢于参考结果。这里将调和平均与算术平均凸组合；权重由问题2/3
+-    给定径向剖面和问题3达标时刻共同校准，并保留为显式模型参数。
++    该取法当初是为了绕开纯调和平均在低含水率外层造成的数值瓶颈——那个判断是对的，
++    调和平均在 t=30 h 的 L∞ 误差比正确取法大约 2200 倍。但凸组合的权重需要按参考
++    答案反标，且每个问题要重标一次（问题2/3 为 0.7247、问题4 为 0.8705）；更根本的是，
++    反解出的"所需权重"随含水率从 4.0 变到 0.61 并跨越 1，任何固定的 w∈[0,1] 都不可能
++    等价于由守恒律导出的界面值。
++
++    现已改用 kirchhoff_diffusivity_mean。本函数保留，仅用于论文的稳健性对照表。
+     """
+ 
+     if not 0.0 <= arithmetic_weight <= 1.0:
+@@ -47,6 +51,31 @@ def calibrated_diffusivity_mean(
+     return (1.0 - arithmetic_weight) * harmonic + arithmetic_weight * arithmetic
+ 
+ 
++def kirchhoff_diffusivity_mean(
++    potential_left: np.ndarray,
++    potential_right: np.ndarray,
++    moisture_left: np.ndarray,
++    moisture_right: np.ndarray,
++    diffusivity_midpoint: np.ndarray,
++) -> np.ndarray:
++    """由通量守恒唯一确定的界面扩散系数 D_face = ΔΦ/ΔC。
++
++    界面上没有物质累积，通量处处相等，对 J = -D(C)·∂C/∂r 沿区间积分立即给出
++        J·Δr = -∫ D dc  ⟹  D_face = (1/ΔC)·∫ D dc = ΔΦ/ΔC,
++    其中 Φ 是基尔霍夫通量势。这是一个恒等式，不是"平均方式的选择"。
++
++    ΔΦ 是两个相近大数之差，ΔC 越小抵消越厉害（实测 ΔC~1e-9 时相对误差已达 1e-6，
++    1e-12 时达 6e-4）。而 |ΔC| 很小时 ΔΦ/ΔC 与中点值本来就只差 O(ΔC²)，
++    因此在 |ΔC| < 1e-6·C 时直接退回中点值，既避开抵消又不损失精度。
++    """
++
++    delta_c = moisture_right - moisture_left
++    mean_c = 0.5 * (moisture_left + moisture_right)
++    tiny = np.abs(delta_c) < 1.0e-6 * np.maximum(np.abs(mean_c), 1.0e-12)
++    safe_delta = np.where(tiny, 1.0, delta_c)
++    return np.where(tiny, diffusivity_midpoint, (potential_right - potential_left) / safe_delta)
++
++
+ @dataclass(frozen=True)
+ class DryingModel:
+     """封装网格、物性、侧面边界、端面等效源项和热湿有限体积右端项。
+@@ -63,6 +92,7 @@ class DryingModel:
+     mass_transfer_coefficient: float
+     cylinder_length_m: float = 0.25
+     include_end_faces: bool = True
++    # 保留字段仅为兼容旧脚本；正式计算不再使用（界面取法已改为基尔霍夫通量势）。
+     diffusivity_arithmetic_weight: float = 0.0
+ 
+     def __post_init__(self) -> None:
+@@ -98,7 +128,9 @@ class DryingModel:
+ 
+         # 先计算全部内部界面热通量，再以相反符号计入相邻控制体，保证守恒。
+         heat_rate = np.zeros(self.node_count)
+-        conductivity_faces = harmonic_mean(material.conductivity[:-1], material.conductivity[1:])
++        # 导热系数在本题只随含水率变 2.3 倍，且连续无间断，调和平均的"串联分层"
++        # 前提不成立；此处取算术平均（各取法在该跨度内相差不到 1%）。
++        conductivity_faces = 0.5 * (material.conductivity[:-1] + material.conductivity[1:])
+         heat_conductance = (
+             conductivity_faces
+             * geometry.interface_areas_per_length_m
+@@ -131,10 +163,20 @@ class DryingModel:
+ 
+         # 水分通量与热通量使用同一套控制体几何和符号约定。
+         moisture_rate = np.zeros(self.node_count)
+-        diffusivity_faces = calibrated_diffusivity_mean(
+-            material.diffusivity[:-1],
+-            material.diffusivity[1:],
+-            self.diffusivity_arithmetic_weight,
++        # Φ 两端都在同一个界面温度上取值：D 同时依赖 C 和 T，而通量势只对 C 定义，
++        # 故沿界面取 T_f = (T_i + T_{i+1})/2。本题 Le≈34，一格内温差极小，该近似可忽略。
++        face_temperature = 0.5 * (temperature[:-1] + temperature[1:])
++        potential_left = self.properties.flux_potential(face_temperature, moisture[:-1])
++        potential_right = self.properties.flux_potential(face_temperature, moisture[1:])
++        midpoint_diffusivity = self.properties.evaluate(
++            face_temperature, 0.5 * (moisture[:-1] + moisture[1:])
++        ).diffusivity
++        diffusivity_faces = kirchhoff_diffusivity_mean(
++            potential_left,
++            potential_right,
++            moisture[:-1],
++            moisture[1:],
++            midpoint_diffusivity,
+         )
+         moisture_conductance = (
+             diffusivity_faces
+diff --git a/CUMCM2026Problems/AProblem/aproblem/official.py b/CUMCM2026Problems/AProblem/aproblem/official.py
+new file mode 100644
+index 0000000..3dbec85
+--- /dev/null
++++ b/CUMCM2026Problems/AProblem/aproblem/official.py
+@@ -0,0 +1,98 @@
++"""按题目模板导出 result1~4.xlsx。
++
++模板口径（直接读官方模板核对得到，不是猜的）：
++  result1 / result2：工作表名 "温度"、"水分浓度"；时间列从 1 s 开始（不是 0），
++                     到 1800 / 10800 s；表头 A1 = "时间\\到药材中心的距离"，
++                     其余 21 列为 0.0, 0.1, …, 2.0 cm。
++  result3          ：工作表名 "Sheet1"；时间从 60 s 开始，步长 60 s；列同上。
++  result4          ：工作表名 "Sheet1"；时间同 result3；末列换成 "药材表面"，
++                     即 0.0, 0.1, …, 1.9 cm 加"药材表面"，共 21 列。
++                     收缩后落在药材之外的位置留空。
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import numpy as np
++from openpyxl import Workbook
++
++from .integrator import SimulationResult
++from .model import DryingModel
++
++HEADER = "时间\\到药材中心的距离"
++REPORT_CM = np.round(np.arange(0.0, 2.01, 0.1), 4)          # 0.0 ~ 2.0 cm
++REPORT_CM_Q4 = np.round(np.arange(0.0, 1.91, 0.1), 4)       # 0.0 ~ 1.9 cm + 药材表面
++
++
++def _write(path: Path, sheets: dict[str, np.ndarray], times, columns, ndigits: int = 4) -> Path:
++    """写出一个工作簿；None 表示该位置不存在（问题4 收缩到药材之外）。"""
++
++    workbook = Workbook(write_only=True)
++    for name, values in sheets.items():
++        sheet = workbook.create_sheet(title=name)
++        sheet.append([HEADER] + list(columns))
++        for index, moment in enumerate(times):
++            row: list[float | None] = [float(moment)]
++            for value in values[index]:
++                row.append(None if value is None or not np.isfinite(value)
++                           else round(float(value), ndigits))
++            sheet.append(row)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    workbook.save(path)
++    return path
++
++
++def _sample_fixed_radius(model: DryingModel, result: SimulationResult, times_s: np.ndarray):
++    """固定半径问题：节点恰好落在上报位置上，按步长抽取，不插值。"""
++
++    node_count = model.node_count
++    stride = (node_count - 1) // 20
++    if (node_count - 1) % 20:
++        raise ValueError("径向区间数必须是 20 的倍数，上报位置才能落在节点上")
++    picked = np.searchsorted(result.time_s, times_s)
++    picked = np.clip(picked, 0, len(result.time_s) - 1)
++    temperature = result.state[picked, :node_count][:, ::stride]
++    moisture = result.state[picked, node_count:][:, ::stride]
++    return temperature, moisture
++
++
++def write_official_result(
++    output_dir: Path,
++    question: int,
++    model: DryingModel,
++    result: SimulationResult,
++    radius_m: np.ndarray | None = None,
++) -> Path:
++    """生成题目要求格式的 result{question}.xlsx。"""
++
++    path = Path(output_dir) / f"result{question}.xlsx"
++
++    if question in (1, 2):
++        end = 1800 if question == 1 else 10800
++        times = np.arange(1, end + 1, 1.0)
++        temperature, moisture = _sample_fixed_radius(model, result, times)
++        return _write(path, {"温度": temperature, "水分浓度": moisture}, times, list(REPORT_CM))
++
++    if question == 3:
++        times = np.arange(60.0, result.time_s[-1] + 1e-9, 60.0)
++        _, moisture = _sample_fixed_radius(model, result, times)
++        return _write(path, {"Sheet1": moisture}, times, list(REPORT_CM))
++
++    if question == 4:
++        node_count = model.node_count
++        times = np.arange(60.0, result.time_s[-1] + 1e-9, 60.0)
++        picked = np.clip(np.searchsorted(result.time_s, times), 0, len(result.time_s) - 1)
++        fraction = np.linspace(0.0, 1.0, node_count)
++        rows = np.full((len(times), len(REPORT_CM_Q4) + 1), np.nan)
++        for out_row, src_row in enumerate(picked):
++            moisture = result.state[src_row, node_count:]
++            current_radius = float(radius_m[src_row])
++            inside = (REPORT_CM_Q4 / 100.0) <= current_radius + 1e-12
++            rows[out_row, :len(REPORT_CM_Q4)][inside] = np.interp(
++                (REPORT_CM_Q4[inside] / 100.0) / current_radius, fraction, moisture
++            )
++            rows[out_row, -1] = moisture[-1]          # 药材表面
++        return _write(path, {"Sheet1": rows}, times, list(REPORT_CM_Q4) + ["药材表面"])
++
++    raise ValueError(f"不支持的问题编号：{question}")
+diff --git a/CUMCM2026Problems/AProblem/aproblem/physics.py b/CUMCM2026Problems/AProblem/aproblem/physics.py
+index 879b4e5..41f1ba2 100644
+--- a/CUMCM2026Problems/AProblem/aproblem/physics.py
++++ b/CUMCM2026Problems/AProblem/aproblem/physics.py
+@@ -7,6 +7,7 @@ from dataclasses import dataclass
+ from typing import Protocol
+ 
+ import numpy as np
++from scipy.special import exp1
+ 
+ 
+ @dataclass(frozen=True)
+@@ -27,6 +28,33 @@ class PropertyModel(Protocol):
+ 
+         ...
+ 
++    def flux_potential(self, temperature_c: np.ndarray, moisture: np.ndarray) -> np.ndarray:
++        """基尔霍夫通量势 Φ(C) = ∫_0^C D dc，用于确定界面扩散系数。"""
++
++        ...
++
++
++def _kirchhoff_potential(
++    amplitude: np.ndarray | float,
++    b: float,
++    moisture: np.ndarray,
++) -> np.ndarray:
++    """D = A·exp(-b/C) 的解析原函数。
++
++    令 u = b/C，由 ∫e^{-u}u^{-2}du = -e^{-u}/u + E₁(u) 得
++
++        ∫ exp(-b/C) dC = C·exp(-b/C) - b·E₁(b/C) + const,
++
++    其中 E₁(u) = ∫_u^∞ e^{-t}/t dt 为指数积分。C→0 时两项都趋于 0，故积分下限取 0
++    即得 Φ。对 C 求导可直接验证 dΦ/dC = D（实测相对偏差 < 2e-10）。
++
++    界面扩散系数 D_face = ΔΦ/ΔC 由通量守恒唯一确定，不含任何自由参数；
++    调和平均、算术平均、中点值都只是这个量的不同求积近似。
++    """
++
++    c = _safe_moisture(moisture)
++    return amplitude * (c * np.exp(-b / c) - b * exp1(b / c))
++
+ 
+ def _safe_moisture(moisture: np.ndarray) -> np.ndarray:
+     """仅在物性公式分母中设置极小正下限，避免数值除零。"""
+@@ -50,6 +78,11 @@ class Question1Properties:
+             diffusivity=7.0e-9 * np.exp(-0.89 / c),
+         )
+ 
++    def flux_potential(self, temperature_c: np.ndarray, moisture: np.ndarray) -> np.ndarray:
++        """问题1 的通量势；D 不含温度项。"""
++
++        return _kirchhoff_potential(7.0e-9, 0.89, moisture)
++
+ 
+ @dataclass(frozen=True)
+ class Question23Properties:
+@@ -67,6 +100,12 @@ class Question23Properties:
+             diffusivity=2.4e-3 * np.exp(-0.45 / c) * np.exp(-3850.0 / temperature_k),
+         )
+ 
++    def flux_potential(self, temperature_c: np.ndarray, moisture: np.ndarray) -> np.ndarray:
++        """问题2/3 的通量势；温度因子作为前置振幅 A(T)。"""
++
++        temperature_k = np.asarray(temperature_c, dtype=float) + 273.15
++        return _kirchhoff_potential(2.4e-3 * np.exp(-3850.0 / temperature_k), 0.45, moisture)
++
+ 
+ @dataclass(frozen=True)
+ class Question4Properties:
+@@ -83,3 +122,9 @@ class Question4Properties:
+             conductivity=0.12 + 0.20 * c / (c + 1.0),
+             diffusivity=4.2e-4 * np.exp(-0.30 / c) * np.exp(-3850.0 / temperature_k),
+         )
++
++    def flux_potential(self, temperature_c: np.ndarray, moisture: np.ndarray) -> np.ndarray:
++        """问题4 的通量势。"""
++
++        temperature_k = np.asarray(temperature_c, dtype=float) + 273.15
++        return _kirchhoff_potential(4.2e-4 * np.exp(-3850.0 / temperature_k), 0.30, moisture)
+diff --git a/CUMCM2026Problems/AProblem/aproblem/scenarios.py b/CUMCM2026Problems/AProblem/aproblem/scenarios.py
+index 2c71afd..46184c7 100644
+--- a/CUMCM2026Problems/AProblem/aproblem/scenarios.py
++++ b/CUMCM2026Problems/AProblem/aproblem/scenarios.py
+@@ -67,7 +67,10 @@ def run_question(
+     radius_data = load_radius(paths.radius_file) if spec.shrinking else None
+     radius_function = radius_data if radius_data is not None else lambda _time: cfg.radius_m
+ 
+-    grid = RadialGrid(cfg.radial_intervals)
++    # 未显式指定时按题号取推荐网格（由各问自己的收敛性实验定，见 config 注释）。
++    intervals = (cfg.radial_intervals if cfg.radial_intervals != 20
++                 else cfg.recommended_intervals[question - 1])
++    grid = RadialGrid(intervals)
+     model = DryingModel(
+         grid=grid,
+         properties=_property_model(question),
+@@ -77,14 +80,6 @@ def run_question(
+         mass_transfer_coefficient=cfg.mass_transfer_coefficient,
+         cylinder_length_m=cfg.cylinder_length_m,
+         include_end_faces=cfg.include_end_faces,
+-        # 问题2/3和收缩条件下的问题4分别使用各自的校准权重。
+-        diffusivity_arithmetic_weight=(
+-            cfg.question23_diffusivity_arithmetic_weight
+-            if question in (2, 3)
+-            else cfg.question4_diffusivity_arithmetic_weight
+-            if question == 4
+-            else 0.0
+-        ),
+     )
+     node_count = model.node_count
+     initial_state = np.concatenate(
+-- 
+2.43.0
+

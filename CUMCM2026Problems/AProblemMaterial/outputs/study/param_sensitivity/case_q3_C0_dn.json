@@ -1,0 +1,16 @@
+{
+  "label": "q3_C0_dn",
+  "question": 3,
+  "interface": "kirchhoff",
+  "perturbation": "C0 -5%",
+  "event_time_s": 206060.15838284296,
+  "event_time_h": 57.238932884123045,
+  "steps": 845630,
+  "wall_s": 737.5,
+  "config": {
+    "initial_moisture": 2.4225,
+    "initial_temperature_c": 28.0,
+    "heat_transfer_coefficient": 25.0,
+    "mass_transfer_coefficient": 8e-07
+  }
+}

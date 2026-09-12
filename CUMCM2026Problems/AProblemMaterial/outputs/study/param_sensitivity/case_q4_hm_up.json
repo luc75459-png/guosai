@@ -1,0 +1,16 @@
+{
+  "label": "q4_hm_up",
+  "question": 4,
+  "interface": "midpoint",
+  "perturbation": "h_m +20%",
+  "event_time_s": 182899.16795618445,
+  "event_time_h": 50.80532443227346,
+  "steps": 836911,
+  "wall_s": 503.7,
+  "config": {
+    "initial_moisture": 2.55,
+    "initial_temperature_c": 28.0,
+    "heat_transfer_coefficient": 25.0,
+    "mass_transfer_coefficient": 9.6e-07
+  }
+}

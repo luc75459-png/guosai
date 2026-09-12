@@ -1,0 +1,2 @@
+﻿label,radial_intervals,axial_intervals,dt_cap_s,insulated_ends,event_time_s,event_hours,elapsed_s,step_count,min_step_s,max_step_s,final_max_moisture,axial_spread_final,centre_moisture_final,surface_moisture_final
+N40x80,40,80,0.5,False,184261.2728599202,51.183686905533385,940.6245286000003,856888,7.237892714329064e-05,0.5,0.15,0.09320372969257751,0.14516105008526817,0.05242581461997109
