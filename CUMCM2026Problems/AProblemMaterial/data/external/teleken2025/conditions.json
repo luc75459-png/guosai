@@ -1,0 +1,61 @@
+{
+  "source": {
+    "citation": "Teleken et al. (2025), Foods 14(3):428",
+    "doi": "10.3390/foods14030428",
+    "pmcid": "PMC11817341",
+    "license": "CC BY 4.0",
+    "note": "开放获取；无补充材料、无数据仓库，实测点只能从 Figure 4 数字化。"
+  },
+  "geometry": {
+    "length_m": 0.0516,
+    "diameter_m": 0.01102,
+    "radius_from_diameter_m": 0.00551,
+    "volume_computational_m3": 3.92e-06,
+    "volume_experimental_m3": 3.82e-06,
+    "radius_volume_equivalent_m": 0.00492,
+    "mass_kg": 0.00394
+  },
+  "sampling_times_min": [0, 15, 30, 45, 60, 90, 120, 150, 180],
+  "cases": {
+    "60C": {
+      "temperature_c": 60.0,
+      "relative_humidity_percent_range": [16, 23],
+      "diffusivity_m2_s": 6.5e-10,
+      "mass_transfer_coefficient_m_s": 0.008,
+      "heat_transfer_coefficient_w_m2k": 60.0,
+      "initial_moisture_measured": 3.8328,
+      "initial_moisture_plan": 4.0,
+      "reported": {
+        "r2_temperature": 0.99,
+        "r2_moisture": 0.95,
+        "rmse_temperature_c": 0.50,
+        "rmse_moisture_kg_kg": 0.22
+      },
+      "centre_temperature_plateau_c": 46.0,
+      "constant_rate_kg_kg_min": 0.04
+    },
+    "70C": {
+      "temperature_c": 70.0,
+      "relative_humidity_percent_range": [11, 19],
+      "diffusivity_m2_s": 8.5e-10,
+      "mass_transfer_coefficient_m_s": 0.007,
+      "heat_transfer_coefficient_w_m2k": 60.0,
+      "initial_moisture_measured": 3.4364,
+      "initial_moisture_plan": 4.0,
+      "reported": {
+        "r2_temperature": 0.97,
+        "r2_moisture": 0.97,
+        "rmse_temperature_c": 1.12,
+        "rmse_moisture_kg_kg": 0.16
+      },
+      "centre_temperature_plateau_c": 53.0,
+      "constant_rate_kg_kg_min": 0.05
+    }
+  },
+  "initial_temperature_c": 25.0,
+  "end_time_min": 180,
+  "notes": {
+    "mass_transfer_mapping": "按预注册口径直接采用论文的 h_m 作为干基驱动系数；论文的吸附等温线式 (10) 在开放全文中的 MathML 结构无法无歧义重建（低含水率端给出 a_w≈1，与脱附数据矛盾），故不做未经验证的换算，改以 h_m×0.1/×10 与环境值敏感性覆盖该不确定性。",
+    "geometry_mapping": "主算例用论文给出的直径换算半径 R=5.51 mm（预注册值）；体积等效半径 R=4.92 mm 作为几何映射敏感性。"
+  }
+}

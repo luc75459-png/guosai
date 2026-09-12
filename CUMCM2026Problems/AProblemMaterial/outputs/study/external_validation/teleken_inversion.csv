@@ -1,0 +1,3 @@
+﻿case,reported_diffusivity,fitted_diffusivity,ratio_fitted_over_reported,rmse_at_fit
+60C,6.5e-10,6.08e-10,0.935,0.0887
+70C,8.5e-10,8.26e-10,0.972,0.0871
